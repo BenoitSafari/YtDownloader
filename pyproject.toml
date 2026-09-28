@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ytdl"
+version = "0.1.0"
+description = "CLI to download YouTube videos/playlists (best quality, all audio & subtitle tracks, MP3/MKV) with resumable jobs and per-process ProtonVPN rotation."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Benoit Safari" }]
+keywords = ["youtube", "yt-dlp", "downloader", "cli", "mkv", "mp3", "wireguard", "vpn"]
+dependencies = [
+    "yt-dlp>=2024.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ytdl = "ytdl.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/BenoitSafari/YtDownloader"
+
+[tool.setuptools.packages.find]
+include = ["ytdl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

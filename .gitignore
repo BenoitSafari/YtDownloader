@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tests
+.pytest_cache/
+.coverage
+
+# Local VPN configs (never commit WireGuard keys!)
+*.conf
+vpn/
+
+# Download artifacts
+*.mkv
+*.mp3
+*.part
+.ytdl-archive.txt
