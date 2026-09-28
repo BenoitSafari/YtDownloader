@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -95,9 +96,11 @@ def build_ytdl_argv(job: DownloadJob, extra: Optional[Sequence[str]] = None) -> 
         "--download-archive", str(archive_path),
         "--no-overwrites",
         "--continue",
-        # Fail (non-zero exit) on error so the VPN-rotation retry loop kicks in;
-        # completed items stay recorded in the archive, so retries resume.
-        "--abort-on-error",
+        # Keep going past a broken playlist item (still exits non-zero if any
+        # failed); completed items stay recorded in the archive, so retries
+        # resume. Line-based progress so output can be streamed and captured.
+        "--no-abort-on-error",
+        "--newline",
         "-o", output_template,
     ]
     if extra:
@@ -106,11 +109,58 @@ def build_ytdl_argv(job: DownloadJob, extra: Optional[Sequence[str]] = None) -> 
     return argv
 
 
-def run(argv: Sequence[str], prefix: Optional[Sequence[str]] = None) -> int:
+# Substrings (case-insensitive) that indicate a transient/geo/rate-limit/bot
+# failure worth retrying under a different VPN connection. Anything else (invalid
+# URL, private/deleted video, unsupported URL, ...) is treated as permanent.
+_RETRYABLE_MARKERS = (
+    "http error 429",
+    "http error 403",
+    "too many requests",
+    "confirm you're not a bot",
+    "confirm you are not a bot",
+    "available in your country",
+    "available from your location",
+    "geo-restrict",
+    "geo restrict",
+    "geoblock",
+    "blocked it in your country",
+    "blocked in your country",
+    "unable to download",
+    "unable to connect",
+    "timed out",
+    "connection reset",
+    "connection refused",
+    "getaddrinfo",
+    "temporary failure",
+    "sslerror",
+    "ssl error",
+    "ssl:",
+    "remote end closed",
+    "read timed out",
+)
+
+
+def is_retryable(output: str) -> bool:
+    """Whether ``output`` from a failed yt-dlp run warrants a VPN rotation."""
+    low = output.lower()
+    return any(marker in low for marker in _RETRYABLE_MARKERS)
+
+
+def run(argv: Sequence[str], prefix: Optional[Sequence[str]] = None) -> tuple[int, str]:
     """Run ``argv`` (optionally wrapped by ``prefix``, e.g. an ``ip netns exec`` runner).
 
-    Returns the process exit code.
+    Streams the process output to this terminal while capturing it, and returns
+    ``(returncode, captured_output)``.
     """
     cmd = list(prefix or []) + list(argv)
-    completed = subprocess.run(cmd)
-    return completed.returncode
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+    )
+    captured: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        captured.append(line)
+    proc.wait()
+    return proc.returncode, "".join(captured)

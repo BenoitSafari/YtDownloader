@@ -1,4 +1,4 @@
-from ytdl.cli import _extract_mode, is_playlist_url
+from ytdl.cli import _extract_mode, is_playlist_url, sanitize_url
 
 
 def test_extract_mode_single_dash():
@@ -24,6 +24,20 @@ def test_extract_mode_only_first_token_consumed():
     mode, rest = _extract_mode(["-mkv", "-mp3", "URL"])
     assert mode == "mkv"
     assert rest == ["-mp3", "URL"]
+
+
+def test_sanitize_url_strips_quotes_and_space():
+    url = "https://www.youtube.com/watch?v=abc&list=PL1"
+    assert sanitize_url(f'"{url}"') == url
+    assert sanitize_url(f"'{url}'") == url
+    assert sanitize_url(f'  "{url}"  ') == url
+    # nested quotes as produced by "'...'"
+    assert sanitize_url(f"\"'{url}'\"") == url
+
+
+def test_sanitize_url_leaves_clean_url_untouched():
+    url = "https://youtu.be/abc"
+    assert sanitize_url(url) == url
 
 
 def test_is_playlist_url():

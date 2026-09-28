@@ -6,6 +6,7 @@ from ytdl.downloader import (
     ARCHIVE_NAME,
     DownloadJob,
     build_ytdl_argv,
+    is_retryable,
     resolve_output,
 )
 
@@ -87,3 +88,32 @@ def test_unknown_mode_raises(tmp_path):
     job = DownloadJob("wav", "url", tmp_path, is_playlist=False)
     with pytest.raises(ValueError):
         _argv(job)
+
+
+def test_playlist_continues_on_error(tmp_path):
+    argv = _argv(DownloadJob("mkv", "url", tmp_path, is_playlist=True))
+    assert "--no-abort-on-error" in argv
+    assert "--abort-on-error" not in argv
+    assert "--newline" in argv
+
+
+@pytest.mark.parametrize("msg", [
+    "ERROR: unable to download video data: HTTP Error 429: Too Many Requests",
+    "ERROR: HTTP Error 403: Forbidden",
+    "Sign in to confirm you're not a bot",
+    "ERROR: The uploader has not made this video available in your country",
+    "ERROR: Unable to download webpage: <urlopen error timed out>",
+    "ConnectionResetError: Connection reset by peer",
+])
+def test_is_retryable_true(msg):
+    assert is_retryable(msg) is True
+
+
+@pytest.mark.parametrize("msg", [
+    "ERROR: 'https://x' is not a valid URL",
+    "ERROR: [youtube] abc: Private video. Sign in if you've been granted access",
+    "ERROR: [youtube] abc: Video unavailable",
+    "ERROR: Unsupported URL: https://example.com/foo",
+])
+def test_is_retryable_false(msg):
+    assert is_retryable(msg) is False

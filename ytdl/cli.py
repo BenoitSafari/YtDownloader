@@ -11,7 +11,13 @@ from typing import Optional, Sequence
 
 from ytdl import __version__
 from ytdl.config import find_vpn_configs, resolve_config
-from ytdl.downloader import DownloadJob, build_ytdl_argv, resolve_output, run
+from ytdl.downloader import (
+    DownloadJob,
+    build_ytdl_argv,
+    is_retryable,
+    resolve_output,
+    run,
+)
 from ytdl.errors import ConfigError, DownloadError, VpnError, YtdlError
 from ytdl.vpn import WireGuardNetns, WgConfig, parse_wg_config
 
@@ -36,6 +42,21 @@ def _extract_mode(argv: list[str]) -> tuple[Optional[str], list[str]]:
         else:
             rest.append(tok)
     return mode, rest
+
+
+def sanitize_url(raw: str) -> str:
+    """Strip surrounding whitespace and one layer of matching quotes.
+
+    Users often paste a URL still wrapped in quotes (e.g. ``"'https://...'"``),
+    which yt-dlp then rejects as an invalid URL.
+    """
+    url = raw.strip()
+    for _ in range(2):  # handle at most one nested pair, e.g. "'...'"
+        if len(url) >= 2 and url[0] == url[-1] and url[0] in "\"'":
+            url = url[1:-1].strip()
+        else:
+            break
+    return url
 
 
 def is_playlist_url(url: str) -> bool:
@@ -81,7 +102,8 @@ def _backoff(attempt: int) -> float:
 
 def _run_direct(argv: Sequence[str]) -> int:
     _log("downloading without VPN")
-    return run(argv)
+    rc, _ = run(argv)
+    return rc
 
 
 def _run_with_vpn(argv: Sequence[str], configs: list[Path], netns: str,
@@ -108,12 +130,21 @@ def _run_with_vpn(argv: Sequence[str], configs: list[Path], netns: str,
             if ip:
                 _log(f"tunnel up — external IP: {ip}")
 
-            last_rc = run(argv, prefix=mgr.exec_prefix())
+            last_rc, output = run(argv, prefix=mgr.exec_prefix())
             mgr.teardown()
 
             if last_rc == 0:
                 _log("download completed successfully")
                 return 0
+
+            # Only rotate for transient/geo/rate-limit/bot failures; a permanent
+            # error (invalid URL, private/deleted video, ...) fails identically on
+            # every server, so stop immediately instead of cycling all configs.
+            if not is_retryable(output):
+                raise DownloadError(
+                    f"download failed (exit {last_rc}) with a non-recoverable error; "
+                    "not a VPN/network issue, so not rotating"
+                )
 
             _log(f"download failed (exit {last_rc}); rotating VPN connection")
             time.sleep(_backoff(attempt))
@@ -142,10 +173,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             cli_max_vpn_cycles=args.max_vpn_cycles,
         )
 
-        playlist = is_playlist_url(args.url)
+        url = sanitize_url(args.url)
+        playlist = is_playlist_url(url)
         job = DownloadJob(
             mode=mode,
-            url=args.url,
+            url=url,
             out=Path(args.out).expanduser(),
             is_playlist=playlist,
             ordered=args.ordered,
