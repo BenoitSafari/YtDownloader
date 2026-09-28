@@ -16,6 +16,10 @@ venv/
 *.conf
 vpn/
 
+# Auth cookies (never commit — they contain session tokens!)
+cookies.txt
+*.cookies
+
 # Download artifacts
 *.mkv
 *.mp3

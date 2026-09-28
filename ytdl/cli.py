@@ -13,6 +13,7 @@ from ytdl import __version__
 from ytdl.config import find_vpn_configs, resolve_config
 from ytdl.downloader import (
     DownloadJob,
+    auth_hint,
     build_ytdl_argv,
     is_retryable,
     resolve_output,
@@ -87,6 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="prefix each playlist item with its index (playlists only)")
     p.add_argument("--auto-subs", action="store_true",
                    help="also fetch auto-generated subtitles (MKV mode)")
+    p.add_argument("--cookies", metavar="FILE",
+                   help="cookies.txt for YouTube auth (default: ~/.config/ytdl/cookies.txt "
+                        "if present). Needed for age-restricted videos.")
+    p.add_argument("--cookies-from-browser", metavar="BROWSER",
+                   help="read cookies from a browser, e.g. 'firefox' or 'chrome:Default' "
+                        "(takes precedence over --cookies)")
     p.add_argument("-v", "--verbose", action="store_true", help="verbose logging")
     p.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     return p
@@ -102,7 +109,11 @@ def _backoff(attempt: int) -> float:
 
 def _run_direct(argv: Sequence[str]) -> int:
     _log("downloading without VPN")
-    rc, _ = run(argv)
+    rc, output = run(argv)
+    if rc != 0:
+        hint = auth_hint(output)
+        if hint:
+            _log(hint)
     return rc
 
 
@@ -141,9 +152,11 @@ def _run_with_vpn(argv: Sequence[str], configs: list[Path], netns: str,
             # error (invalid URL, private/deleted video, ...) fails identically on
             # every server, so stop immediately instead of cycling all configs.
             if not is_retryable(output):
+                hint = auth_hint(output)
+                detail = f" {hint}" if hint else ""
                 raise DownloadError(
                     f"download failed (exit {last_rc}) with a non-recoverable error; "
-                    "not a VPN/network issue, so not rotating"
+                    f"not a VPN/network issue, so not rotating.{detail}"
                 )
 
             _log(f"download failed (exit {last_rc}); rotating VPN connection")
@@ -171,7 +184,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             cli_vpn_dir=args.vpn_dir,
             cli_netns=args.netns,
             cli_max_vpn_cycles=args.max_vpn_cycles,
+            cli_cookies=args.cookies,
+            cli_cookies_from_browser=args.cookies_from_browser,
         )
+
+        if cfg.cookies_from_browser:
+            _log(f"using cookies from browser: {cfg.cookies_from_browser}")
+        elif cfg.cookies_file:
+            _log(f"using cookies file: {cfg.cookies_file}")
 
         url = sanitize_url(args.url)
         playlist = is_playlist_url(url)
@@ -182,6 +202,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             is_playlist=playlist,
             ordered=args.ordered,
             auto_subs=args.auto_subs,
+            cookies_file=cfg.cookies_file,
+            cookies_from_browser=cfg.cookies_from_browser,
         )
 
         # Ensure the output directory exists (archive lives there too).

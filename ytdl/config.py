@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from ytdl.errors import ConfigError
+
 # tomllib is stdlib since 3.11; fall back to the tomli backport, else skip.
 try:  # pragma: no cover - trivial import shim
     import tomllib as _toml
@@ -42,6 +44,11 @@ def default_config_file() -> Path:
     return _config_home() / "config.toml"
 
 
+def default_cookies_file() -> Path:
+    """Default cookies.txt scanned for YouTube authentication."""
+    return _config_home() / "cookies.txt"
+
+
 def _load_config_file(path: Path) -> dict[str, Any]:
     if _toml is None or not path.is_file():
         return {}
@@ -60,6 +67,8 @@ class Config:
     vpn_dir: Path
     netns: str
     max_vpn_cycles: int
+    cookies_file: Optional[Path] = None
+    cookies_from_browser: Optional[str] = None
 
 
 def resolve_config(
@@ -67,6 +76,8 @@ def resolve_config(
     cli_vpn_dir: Optional[str] = None,
     cli_netns: Optional[str] = None,
     cli_max_vpn_cycles: Optional[int] = None,
+    cli_cookies: Optional[str] = None,
+    cli_cookies_from_browser: Optional[str] = None,
     config_file: Optional[Path] = None,
 ) -> Config:
     """Merge CLI args, env vars, config file and defaults into a :class:`Config`."""
@@ -101,7 +112,36 @@ def resolve_config(
     else:
         max_cycles = DEFAULT_MAX_VPN_CYCLES
 
-    return Config(vpn_dir=vpn_dir, netns=str(netns), max_vpn_cycles=int(max_cycles))
+    # cookies_from_browser (a browser spec like "firefox" or "chrome:Default")
+    cookies_from_browser = (
+        cli_cookies_from_browser
+        or os.environ.get("YTDL_COOKIES_FROM_BROWSER")
+        or file_data.get("cookies_from_browser")
+        or None
+    )
+
+    # cookies_file: an explicit source must exist; otherwise use the default
+    # cookies.txt only when it is actually present.
+    explicit_cookies = (
+        cli_cookies
+        or os.environ.get("YTDL_COOKIES")
+        or file_data.get("cookies")
+    )
+    if explicit_cookies:
+        cookies_file: Optional[Path] = Path(str(explicit_cookies)).expanduser()
+        if not cookies_file.is_file():
+            raise ConfigError(f"cookies file not found: {cookies_file}")
+    else:
+        default_cookies = default_cookies_file()
+        cookies_file = default_cookies if default_cookies.is_file() else None
+
+    return Config(
+        vpn_dir=vpn_dir,
+        netns=str(netns),
+        max_vpn_cycles=int(max_cycles),
+        cookies_file=cookies_file,
+        cookies_from_browser=str(cookies_from_browser) if cookies_from_browser else None,
+    )
 
 
 def find_vpn_configs(vpn_dir: Path) -> list[Path]:

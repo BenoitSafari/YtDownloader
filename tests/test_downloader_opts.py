@@ -5,6 +5,7 @@ import pytest
 from ytdl.downloader import (
     ARCHIVE_NAME,
     DownloadJob,
+    auth_hint,
     build_ytdl_argv,
     is_retryable,
     resolve_output,
@@ -114,6 +115,37 @@ def test_is_retryable_true(msg):
     "ERROR: [youtube] abc: Private video. Sign in if you've been granted access",
     "ERROR: [youtube] abc: Video unavailable",
     "ERROR: Unsupported URL: https://example.com/foo",
+    "ERROR: [youtube] abc: Sign in to confirm your age. Use --cookies-from-browser",
 ])
 def test_is_retryable_false(msg):
     assert is_retryable(msg) is False
+
+
+def test_cookies_file_flag(tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    job = DownloadJob("mp3", "url", tmp_path, is_playlist=False, cookies_file=cookies)
+    argv = _argv(job)
+    assert _pairs(argv, "--cookies") == [str(cookies)]
+    assert "--cookies-from-browser" not in argv
+
+
+def test_cookies_from_browser_flag(tmp_path):
+    job = DownloadJob("mkv", "url", tmp_path, is_playlist=False,
+                      cookies_from_browser="firefox")
+    argv = _argv(job)
+    assert _pairs(argv, "--cookies-from-browser") == ["firefox"]
+    assert "--cookies" not in argv
+
+
+def test_browser_takes_precedence_over_file(tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    job = DownloadJob("mkv", "url", tmp_path, is_playlist=False,
+                      cookies_file=cookies, cookies_from_browser="chrome")
+    argv = _argv(job)
+    assert "--cookies-from-browser" in argv
+    assert "--cookies" not in argv
+
+
+def test_auth_hint_detects_age_restriction():
+    assert auth_hint("Sign in to confirm your age") is not None
+    assert auth_hint("HTTP Error 429: Too Many Requests") is None

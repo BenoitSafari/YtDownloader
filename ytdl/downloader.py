@@ -26,6 +26,8 @@ class DownloadJob:
     is_playlist: bool
     ordered: bool = False
     auto_subs: bool = False
+    cookies_file: Optional[Path] = None
+    cookies_from_browser: Optional[str] = None
 
 
 def resolve_output(job: DownloadJob) -> tuple[Path, str]:
@@ -103,6 +105,12 @@ def build_ytdl_argv(job: DownloadJob, extra: Optional[Sequence[str]] = None) -> 
         "--newline",
         "-o", output_template,
     ]
+    # Authentication cookies (needed for age-restricted / members-only videos).
+    # yt-dlp accepts only one source; the browser takes precedence over a file.
+    if job.cookies_from_browser:
+        argv += ["--cookies-from-browser", job.cookies_from_browser]
+    elif job.cookies_file:
+        argv += ["--cookies", str(job.cookies_file)]
     if extra:
         argv += list(extra)
     argv.append(job.url)
@@ -144,6 +152,31 @@ def is_retryable(output: str) -> bool:
     """Whether ``output`` from a failed yt-dlp run warrants a VPN rotation."""
     low = output.lower()
     return any(marker in low for marker in _RETRYABLE_MARKERS)
+
+
+# Markers of an authentication requirement — rotating the VPN cannot fix these;
+# the user must supply cookies (age-restricted / private / members-only videos).
+_AUTH_MARKERS = (
+    "confirm your age",
+    "age-restricted",
+    "age restricted",
+    "private video",
+    "members-only",
+    "members only",
+    "join this channel",
+    "sign in if you've been granted access",
+    "use --cookies",
+)
+
+
+def auth_hint(output: str) -> Optional[str]:
+    """Return an actionable hint if the failure looks like an auth/cookies issue."""
+    low = output.lower()
+    if any(marker in low for marker in _AUTH_MARKERS):
+        return ("this video requires a signed-in YouTube account (age-restricted or "
+                "private). Provide cookies via --cookies FILE or "
+                "--cookies-from-browser BROWSER (see README).")
+    return None
 
 
 def run(argv: Sequence[str], prefix: Optional[Sequence[str]] = None) -> tuple[int, str]:

@@ -40,6 +40,8 @@ job: already-downloaded items are skipped.
 | `-mp3` / `-mkv` | output mode (required) |
 | `--ordered` | prefix each file with its playlist index (playlists only) |
 | `--auto-subs` | also fetch auto-generated subtitles (MKV) |
+| `--cookies FILE` | cookies.txt for YouTube auth (default `~/.config/ytdl/cookies.txt` if present) |
+| `--cookies-from-browser BROWSER` | read cookies from a browser, e.g. `firefox` or `chrome:Default` |
 | `--vpn-dir DIR` | directory of WireGuard configs (default `~/.config/ytdl/vpn/`) |
 | `--no-vpn` | force downloading without VPN |
 | `--require-vpn` | fail if no VPN config is found |
@@ -65,3 +67,34 @@ chmod 600 ~/.config/ytdl/vpn/*.conf   # these files contain your private key
 
 > Never commit your `.conf` files — they contain your private key (already excluded by
 > `.gitignore`).
+
+## Authentication (age-restricted videos)
+
+Some videos require a signed-in (adult) YouTube account. Provide cookies from a logged-in
+session — auto-detected the same way as the VPN configs.
+
+**Option A — cookies from your browser** (closest to an "auto-login"; stay logged in to
+YouTube in that browser):
+
+```bash
+ytdl -mkv "<url>" ./out --cookies-from-browser firefox
+```
+
+Under the VPN (which runs as `sudo`), **Firefox** works reliably; Chrome may fail to decrypt
+its cookies as root.
+
+**Option B — a cookies.txt file** (most robust with VPN + sudo). Export it once with a browser
+extension (e.g. *Get cookies.txt LOCALLY*) while logged in to YouTube, then:
+
+```bash
+mkdir -p ~/.config/ytdl
+mv ~/Downloads/cookies.txt ~/.config/ytdl/cookies.txt
+chmod 600 ~/.config/ytdl/cookies.txt
+```
+
+Once `~/.config/ytdl/cookies.txt` exists it is used automatically (no flag needed). Re-export
+it when the session expires.
+
+> Never commit your cookies — they contain session tokens (already excluded by `.gitignore`).
+> Without cookies, an age-restricted item is skipped (the rest of the playlist still
+> downloads) and `ytdl` prints a hint instead of pointlessly rotating the VPN.
