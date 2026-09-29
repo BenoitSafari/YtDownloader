@@ -7,9 +7,10 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from ytdl import __version__
+from ytdl.batch import parse_batch_file
 from ytdl.config import find_vpn_configs, resolve_config
 from ytdl.downloader import (
     DownloadJob,
@@ -107,29 +108,40 @@ def _backoff(attempt: int) -> float:
     return float(min(2 ** attempt, 16))
 
 
-def _run_direct(argv: Sequence[str]) -> int:
+# An item is a (label, yt-dlp argv) pair. Single-URL mode is a one-item list.
+Item = Tuple[str, List[str]]
+
+
+def _run_direct(items: Sequence[Item]) -> int:
     _log("downloading without VPN")
-    rc, output = run(argv)
-    if rc != 0:
-        hint = auth_hint(output)
-        if hint:
-            _log(hint)
-    return rc
+    failed = 0
+    for label, argv in items:
+        _log(f"→ {label}")
+        rc, output = run(argv)
+        if rc != 0:
+            failed += 1
+            hint = auth_hint(output)
+            _log(f"failed: {label}" + (f" — {hint}" if hint else f" (exit {rc})"))
+    return 1 if failed else 0
 
 
-def _run_with_vpn(argv: Sequence[str], configs: list[Path], netns: str,
+def _run_with_vpn(items: Sequence[Item], configs: list[Path], netns: str,
                   max_cycles: int, verbose: bool) -> int:
     parsed: list[WgConfig] = [parse_wg_config(p) for p in configs]  # validate up front
     random.shuffle(parsed)
 
     mgr = WireGuardNetns(netns, verbose=verbose)
     total = len(parsed) * max(1, max_cycles)
-    last_rc = 1
+    pending: list[Item] = list(items)
+    failed_hard: list[str] = []
 
     try:
         for attempt in range(total):
+            if not pending:
+                break
             cfg = parsed[attempt % len(parsed)]
-            _log(f"VPN attempt {attempt + 1}/{total} via config '{cfg.name}'")
+            _log(f"VPN attempt {attempt + 1}/{total} via config '{cfg.name}' "
+                 f"({len(pending)} item(s) pending)")
             try:
                 mgr.setup(cfg)
             except VpnError as exc:
@@ -141,31 +153,85 @@ def _run_with_vpn(argv: Sequence[str], configs: list[Path], netns: str,
             if ip:
                 _log(f"tunnel up — external IP: {ip}")
 
-            last_rc, output = run(argv, prefix=mgr.exec_prefix())
+            prefix = mgr.exec_prefix()
+            still: list[Item] = []
+            for label, argv in pending:
+                _log(f"→ {label}")
+                rc, output = run(argv, prefix=prefix)
+                if rc == 0:
+                    continue
+                # Retry transient/geo/rate-limit/bot failures under another
+                # server; a permanent error (invalid URL, auth/age) fails on
+                # every server, so drop that item and keep going with the rest.
+                if is_retryable(output):
+                    _log(f"retryable failure: {label} (exit {rc})")
+                    still.append((label, argv))
+                else:
+                    hint = auth_hint(output)
+                    _log(f"skipping (non-recoverable): {label}"
+                         + (f" — {hint}" if hint else f" (exit {rc})"))
+                    failed_hard.append(label)
             mgr.teardown()
 
-            if last_rc == 0:
-                _log("download completed successfully")
-                return 0
+            pending = still
+            if pending:
+                _log("rotating VPN connection")
+                time.sleep(_backoff(attempt))
 
-            # Only rotate for transient/geo/rate-limit/bot failures; a permanent
-            # error (invalid URL, private/deleted video, ...) fails identically on
-            # every server, so stop immediately instead of cycling all configs.
-            if not is_retryable(output):
-                hint = auth_hint(output)
-                detail = f" {hint}" if hint else ""
-                raise DownloadError(
-                    f"download failed (exit {last_rc}) with a non-recoverable error; "
-                    f"not a VPN/network issue, so not rotating.{detail}"
-                )
-
-            _log(f"download failed (exit {last_rc}); rotating VPN connection")
-            time.sleep(_backoff(attempt))
-        raise DownloadError(
-            f"download still failing after {total} VPN attempts (last exit {last_rc})"
-        )
+        if pending:
+            _log(f"giving up on {len(pending)} item(s) after {total} VPN attempts")
+            failed_hard.extend(label for label, _ in pending)
+        return 1 if failed_hard else 0
     finally:
         mgr.teardown()
+
+
+def _build_single_item(url: str, mode: str, out: Path, cfg, args) -> List[Item]:
+    job = DownloadJob(
+        mode=mode,
+        url=url,
+        out=out,
+        is_playlist=is_playlist_url(url),
+        ordered=args.ordered,
+        auto_subs=args.auto_subs,
+        cookies_file=cfg.cookies_file,
+        cookies_from_browser=cfg.cookies_from_browser,
+    )
+    # Ensure the output directory exists (the archive lives there too).
+    output_dir, _ = resolve_output(job)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return [(url, build_ytdl_argv(job))]
+
+
+def _build_batch_items(path: Path, mode: str, out: Path, cfg, args) -> List[Item]:
+    if out.is_file():
+        raise ConfigError(f"in batch mode, OUT must be a directory, not a file: {out}")
+    out.mkdir(parents=True, exist_ok=True)
+
+    entries = parse_batch_file(path)
+    items: List[Item] = []
+    skipped = 0
+    for entry in entries:
+        # Playlists are out of scope for batch mode; detected by URL shape only
+        # (no network request).
+        if is_playlist_url(entry.url):
+            _log(f"playlist detected: skip: {entry.url}")
+            skipped += 1
+            continue
+        job = DownloadJob(
+            mode=mode,
+            url=entry.url,
+            out=out,
+            is_playlist=False,
+            auto_subs=args.auto_subs,
+            cookies_file=cfg.cookies_file,
+            cookies_from_browser=cfg.cookies_from_browser,
+            output_name=entry.title,
+        )
+        items.append((entry.title or entry.url, build_ytdl_argv(job)))
+
+    _log(f"batch: {len(items)} item(s) to download, {skipped} playlist(s) skipped")
+    return items
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -194,33 +260,28 @@ def main(argv: Optional[list[str]] = None) -> int:
             _log(f"using cookies file: {cfg.cookies_file}")
 
         url = sanitize_url(args.url)
-        playlist = is_playlist_url(url)
-        job = DownloadJob(
-            mode=mode,
-            url=url,
-            out=Path(args.out).expanduser(),
-            is_playlist=playlist,
-            ordered=args.ordered,
-            auto_subs=args.auto_subs,
-            cookies_file=cfg.cookies_file,
-            cookies_from_browser=cfg.cookies_from_browser,
-        )
+        out = Path(args.out).expanduser()
 
-        # Ensure the output directory exists (archive lives there too).
-        output_dir, _ = resolve_output(job)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Batch mode is auto-detected: the positional "URL" is actually a file.
+        if Path(url).expanduser().is_file():
+            items = _build_batch_items(Path(url).expanduser(), mode, out, cfg, args)
+            if not items:
+                _log("nothing to download")
+                return 0
+        else:
+            items = _build_single_item(url, mode, out, cfg, args)
 
-        ytdl_argv = build_ytdl_argv(job)
         if args.verbose:
-            _log("yt-dlp command: " + " ".join(ytdl_argv))
+            for label, argv in items:
+                _log(f"yt-dlp command [{label}]: " + " ".join(argv))
 
         vpn_configs = [] if args.no_vpn else find_vpn_configs(cfg.vpn_dir)
 
         if args.no_vpn:
-            rc = _run_direct(ytdl_argv)
+            rc = _run_direct(items)
         elif vpn_configs:
             _log(f"found {len(vpn_configs)} VPN config(s) in {cfg.vpn_dir}")
-            rc = _run_with_vpn(ytdl_argv, vpn_configs, cfg.netns,
+            rc = _run_with_vpn(items, vpn_configs, cfg.netns,
                                cfg.max_vpn_cycles, args.verbose)
         elif args.require_vpn:
             raise ConfigError(
@@ -228,10 +289,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         else:
             _log(f"no VPN config found in {cfg.vpn_dir}")
-            rc = _run_direct(ytdl_argv)
+            rc = _run_direct(items)
 
         if rc != 0:
-            raise DownloadError(f"yt-dlp exited with code {rc}")
+            raise DownloadError("one or more downloads failed")
+        _log("done")
         return 0
 
     except FileNotFoundError as exc:

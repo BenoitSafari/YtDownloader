@@ -28,6 +28,20 @@ class DownloadJob:
     auto_subs: bool = False
     cookies_file: Optional[Path] = None
     cookies_from_browser: Optional[str] = None
+    output_name: Optional[str] = None  # explicit base filename (batch mode)
+
+
+def sanitize_output_name(name: str) -> str:
+    """Make ``name`` safe as a literal yt-dlp output template component.
+
+    Escapes ``%`` (so yt-dlp does not treat it as a field), replaces path
+    separators with ``-`` and strips control characters. Spaces, dots and the
+    leading numbering are kept, so "1. Ichor" stays "1. Ichor".
+    """
+    cleaned = "".join(ch for ch in name if ch >= " ").strip()
+    cleaned = cleaned.replace("/", "-").replace("\\", "-").replace("\x7f", "")
+    cleaned = cleaned.replace("%", "%%")
+    return cleaned or "download"
 
 
 def resolve_output(job: DownloadJob) -> tuple[Path, str]:
@@ -39,6 +53,10 @@ def resolve_output(job: DownloadJob) -> tuple[Path, str]:
     - Single video with a directory-like ``out``: files land inside it.
     """
     out = job.out
+
+    # Explicit output name (batch mode): produce "<dir>/<name>.<ext>".
+    if job.output_name and not job.is_playlist:
+        return out, str(out / f"{sanitize_output_name(job.output_name)}.%(ext)s")
 
     if job.is_playlist:
         output_dir = out

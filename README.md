@@ -33,6 +33,28 @@ ytdl -mkv "https://www.youtube.com/playlist?list=PLxxxx" ./my_playlist --ordered
 For a **playlist**, `OUTPUT_PATH` is a **folder**. Re-running the same command resumes the
 job: already-downloaded items are skipped.
 
+### Batch mode
+
+If the first argument is a **file** instead of a URL, `ytdl` runs in batch mode and
+`OUTPUT_PATH` is a folder. Each line is `"title",url` (title optional):
+
+```
+"1. Ichor",https://www.youtube.com/watch?v=eqwbRd-QhS4
+"5. Burn Under My Skin (with Bailzwil)",https://www.youtube.com/watch?v=zzzz
+https://www.youtube.com/watch?v=yyyy
+```
+
+```bash
+ytdl -mp3 tracks.txt ./album
+```
+
+- A titled line is saved as `title.<ext>` → `1. Ichor.mp3`; a bare URL uses the YouTube
+  title. Blank lines and `#` comments are ignored.
+- **Playlist URLs are skipped** (logged `playlist detected: skip`), detected by URL shape —
+  no request is made. Batch mode downloads individual videos only.
+- Resume works like a playlist (archive + no-overwrite in the output folder), so a broken
+  batch continues where it stopped.
+
 ### Options
 
 | Option | Description |

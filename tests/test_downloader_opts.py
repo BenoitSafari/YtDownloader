@@ -9,6 +9,7 @@ from ytdl.downloader import (
     build_ytdl_argv,
     is_retryable,
     resolve_output,
+    sanitize_output_name,
 )
 
 
@@ -149,3 +150,19 @@ def test_browser_takes_precedence_over_file(tmp_path):
 def test_auth_hint_detects_age_restriction():
     assert auth_hint("Sign in to confirm your age") is not None
     assert auth_hint("HTTP Error 429: Too Many Requests") is None
+
+
+def test_output_name_template(tmp_path):
+    job = DownloadJob("mp3", "url", tmp_path, is_playlist=False, output_name="1. Ichor")
+    out_dir, template = resolve_output(job)
+    assert out_dir == tmp_path
+    assert template == str(tmp_path / "1. Ichor.%(ext)s")
+    # and it flows into the argv
+    assert _pairs(_argv(job), "-o") == [str(tmp_path / "1. Ichor.%(ext)s")]
+
+
+def test_sanitize_output_name():
+    assert sanitize_output_name("1. Ichor") == "1. Ichor"
+    assert sanitize_output_name("AC/DC") == "AC-DC"
+    assert sanitize_output_name("100% pure") == "100%% pure"
+    assert sanitize_output_name("  spaced  ") == "spaced"
