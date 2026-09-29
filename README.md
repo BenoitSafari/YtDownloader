@@ -7,8 +7,17 @@ Python ≥ 3.9, plus `ffmpeg` and (for VPN mode) `wireguard-tools` / `iproute2`:
 
 ## Installation
 
+On **Arch Linux**, run the install script (pacman deps + pipx, avoids the
+`externally-managed-environment` error):
+
 ```bash
-pip install -e .
+./install.sh
+```
+
+Otherwise, install the deps from *Requirements* and:
+
+```bash
+pipx install -e .   # or, inside a venv: pip install -e .
 ```
 
 ## Usage
